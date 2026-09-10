@@ -391,6 +391,24 @@ nameInput.style.cssText = [
   'border:none',
   'width:9em',
 ].join(';');
+// Phaser's keyboard plugin listens on the window regardless of DOM focus and
+// calls preventDefault() for every captured key (WASD + arrows, registered
+// in GameScene#create) — which silently eats those keydown events before
+// the browser ever inserts the character into a focused text input. That's
+// exactly why "w"/"a"/"s"/"d" (and arrow-adjacent keys) could drop out of
+// this field while every other letter worked fine. Pausing capture (and the
+// plugin itself, so movement can't sneak through either) for as long as
+// this input is focused routes every keystroke to the field uninterrupted;
+// resetGame() below also unconditionally re-enables it as a backstop, in
+// case this field is hidden without a blur event ever firing.
+nameInput.addEventListener('focus', () => {
+  gameScene.input.keyboard.enabled = false;
+  gameScene.input.keyboard.disableGlobalCapture();
+});
+nameInput.addEventListener('blur', () => {
+  gameScene.input.keyboard.enabled = true;
+  gameScene.input.keyboard.enableGlobalCapture();
+});
 async function submitScore(name, timeSeconds) {
   submitBtn.textContent = 'Submitting…';
   submitBtn.disabled = true;
@@ -433,6 +451,11 @@ function resetGame() {
   gameState.won = false;
   caughtEl.style.display = 'none';
   rescuedEl.style.display = 'none';
+  // Backstop for nameInput's blur handler above — hiding rescuedEl doesn't
+  // reliably blur the input in every browser, which would otherwise leave
+  // Phaser's keyboard permanently paused.
+  gameScene.input.keyboard.enabled = true;
+  gameScene.input.keyboard.enableGlobalCapture();
   startTimer();
   gameScene.resetLevel();
 }

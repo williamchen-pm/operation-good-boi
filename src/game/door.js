@@ -1,34 +1,29 @@
 // ---------------------------------------------------------------------------
-// Door — ported from the original game. Same trigger point/distance, same
-// locked(red)/unlocked(green) color logic. Drawn with Phaser Graphics for
-// now (a frame outline + threshold panel + arrow) — a placeholder for a
-// proper door tile from the tileset in a later art pass.
+// Door — a real door sprite (prop_door, a front-elevation double door cropped
+// from the purchased RCC Streets tileset) standing in for the flat graphics
+// placeholder this used to be. Locked/unlocked reads as a clear color swap
+// (red vs green tint, same convention already used for the door's own
+// original placeholder and for cluster overlap warnings on the guards'
+// vision cones elsewhere) rather than a fresh visual language to learn.
 // ---------------------------------------------------------------------------
 import { TILE_SIZE, DOOR_XZ, DOOR_W, DOOR_D } from './constants.js';
 
-const LOCKED = 0xd0342a;
-const UNLOCKED = 0x2fd06a;
+const LOCKED = 0xff6b5a;
+const UNLOCKED = 0x6bffa0;
 
 export function createDoor(scene) {
   const cx = DOOR_XZ.x * TILE_SIZE;
   const cy = DOOR_XZ.y * TILE_SIZE;
-  const w = DOOR_W * TILE_SIZE;
-  const d = DOOR_D * TILE_SIZE;
 
-  const frame = scene.add.graphics();
-  frame.lineStyle(2, 0xdcdad0, 1);
-  frame.strokeRect(cx - w / 2 - 3, cy - d / 2 - 3, w + 6, d + 6);
-  frame.setDepth(cy - d);
-
-  const panel = scene.add.rectangle(cx, cy, w, d, LOCKED);
-  panel.setDepth(cy - d + 1);
-
-  const arrow = scene.add.triangle(cx, cy, 0, -8, -8, 8, 8, 8, 0xf6f3e7);
-  arrow.setDepth(cy - d + 2);
+  const sprite = scene.add.image(cx, cy, 'prop_door');
+  sprite.setDisplaySize(DOOR_W * TILE_SIZE, DOOR_D * TILE_SIZE);
+  sprite.setTint(LOCKED);
+  sprite.setDepth(cy + (DOOR_D * TILE_SIZE) / 2);
+  sprite.setPipeline('Light2D'); // lit like every other environmental prop — the entrance's own light pool keeps it readable
 
   return {
     setLocked(locked) {
-      panel.fillColor = locked ? LOCKED : UNLOCKED;
+      sprite.setTint(locked ? LOCKED : UNLOCKED);
     },
     x: cx,
     y: cy,

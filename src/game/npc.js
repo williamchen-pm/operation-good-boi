@@ -6,10 +6,11 @@
 // rebuilt-every-frame Phaser Graphics triangle fan — same ray-cast shape.
 // ---------------------------------------------------------------------------
 import {
-  TILE_SIZE, NPC_RADIUS, TURN_SPEED, VISION_RANGE, VISION_HALF_ANGLE, CONE_RAYS,
+  TILE_SIZE, TURN_SPEED, VISION_RANGE, VISION_HALF_ANGLE, CONE_RAYS,
   WANDER_MIN_DIST, WANDER_MAX_DIST, WANDER_BOUNDS, PAUSE_MIN, PAUSE_MAX,
   OVERLAP_COOLDOWN, STUCK_GIVEUP, WALL_HUG_CHECK_DIST, WALL_HUG_FRACTION,
   WALL_HUG_SAMPLES, WALL_HUG_COOLDOWN, MIN_SPOOK_TURN,
+  PLAYER_SPAWN, NPC_SPAWN_SAFE_RADIUS, FLOOR_X, FLOOR_Y,
 } from './constants.js';
 import { moveWithCollision, rayObstacleDistance } from './obstacles.js';
 import { approachAngle, headingToDir4, playAnimForDir } from './anim.js';
@@ -20,11 +21,73 @@ function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
 }
 
+// Hard rule (see constants.js#NPC_SPAWN_SAFE_RADIUS): if a requested spawn
+// point is too close to the player's start, push it straight out along the
+// player->point direction until it clears the safe radius, then keep it on
+// the floor. This runs once per NPC at creation time and its result is
+// stored as spawnX/spawnY, so every later resetNpc() reuses the same
+// already-safe point automatically — the check can't be skipped by editing
+// NPC_DEFS or by a level reset.
+function enforceSpawnSafeZone(x, y) {
+  const dx = x - PLAYER_SPAWN.x;
+  const dy = y - PLAYER_SPAWN.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist >= NPC_SPAWN_SAFE_RADIUS) return { x, y };
+  const angle = dist < 1e-6 ? -Math.PI / 2 : Math.atan2(dy, dx);
+  const safeX = PLAYER_SPAWN.x + Math.cos(angle) * NPC_SPAWN_SAFE_RADIUS;
+  const safeY = PLAYER_SPAWN.y + Math.sin(angle) * NPC_SPAWN_SAFE_RADIUS;
+  return {
+    x: clamp(safeX, FLOOR_X[0] + 1, FLOOR_X[1] - 1),
+    y: clamp(safeY, FLOOR_Y[0] + 1, FLOOR_Y[1] - 1),
+  };
+}
+
 export function pickWanderTarget(npc) {
   const ang = Math.random() * Math.PI * 2;
   const dist = WANDER_MIN_DIST + Math.random() * (WANDER_MAX_DIST - WANDER_MIN_DIST);
   npc.targetX = clamp(npc.sprite.x / TILE_SIZE + Math.cos(ang) * dist, -WANDER_BOUNDS.x, WANDER_BOUNDS.x);
   npc.targetY = clamp(npc.sprite.y / TILE_SIZE + Math.sin(ang) * dist, -WANDER_BOUNDS.y, WANDER_BOUNDS.y);
+}
+
+// ---------------------------------------------------------------------------
+// Darkness-aware guard/cone visibility — same principle already applied to
+// the player (who simply never uses the Light2D pipeline, so ambient
+// darkness can never touch them), extended to guards and their cones: both
+// stay on the default pipeline too (so THIS logic, not the shader, is the
+// one and only thing dimming them), but here we deliberately want them to
+// read differently in lit vs. unlit spots, clamped to a floor that keeps
+// them "harder to spot at a glance", never "invisible until it's too late".
+// sampleLightLevel() re-derives, in plain JS, roughly what the Light2D
+// shader would compute at a point (ambient + each in-range light's
+// falloff*intensity) — it doesn't need to match the shader's exact curve,
+// only to correlate well enough to tell "well inside a lit pool" apart from
+// "out in the ambient-only dark", which is all this needs.
+// ---------------------------------------------------------------------------
+const DARK_LEVEL = 0.08; // ~= the ambient-only brightness floor (see GameScene#setupLighting)
+const LIT_LEVEL = 0.5; // brightness at/beyond which something reads as "fully lit" — reached well before a light's exact center
+const MIN_NPC_ALPHA = 0.5; // guard sprite's floor opacity in full dark — dim, never gone
+const MIN_CONE_ALPHA = 0.13; // cone's floor opacity in full dark (lit-area alpha is 0.34)
+const CONE_ALPHA_LIT = 0.34;
+
+function sampleLightLevel(scene, x, y) {
+  const lm = scene.lights;
+  const amb = lm.ambientColor._rgb;
+  let level = (amb[0] + amb[1] + amb[2]) / 3;
+  for (const light of lm.lights) {
+    const dx = x - light.x;
+    const dy = y - light.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist >= light.radius) continue;
+    const falloff = 1 - dist / light.radius;
+    const c = light.color._rgb;
+    const luma = (c[0] + c[1] + c[2]) / 3;
+    level += falloff * light.intensity * luma;
+  }
+  return level;
+}
+
+function litVisibility(level) {
+  return clamp((level - DARK_LEVEL) / (LIT_LEVEL - DARK_LEVEL), 0, 1);
 }
 
 export function updateVisionCone(npc) {
@@ -41,7 +104,12 @@ export function updateVisionCone(npc) {
       y: (oy + Math.sin(npc.heading + theta) * dist) * TILE_SIZE,
     });
   }
-  g.fillStyle(0xff5a4a, 0.34);
+
+  const t = litVisibility(sampleLightLevel(npc.sprite.scene, npc.sprite.x, npc.sprite.y));
+  npc.sprite.setAlpha(MIN_NPC_ALPHA + (1 - MIN_NPC_ALPHA) * t);
+  const coneAlpha = MIN_CONE_ALPHA + (CONE_ALPHA_LIT - MIN_CONE_ALPHA) * t;
+
+  g.fillStyle(0xff5a4a, coneAlpha);
   g.beginPath();
   g.moveTo(npc.sprite.x, npc.sprite.y);
   for (const p of points) g.lineTo(p.x, p.y);
@@ -50,7 +118,15 @@ export function updateVisionCone(npc) {
 }
 
 export function makeNpc(scene, textureKey, x, y, speed) {
-  const sprite = scene.add.sprite(x * TILE_SIZE, y * TILE_SIZE, textureKey, 1);
+  const safe = enforceSpawnSafeZone(x, y);
+  const sprite = scene.add.sprite(safe.x * TILE_SIZE, safe.y * TILE_SIZE, textureKey, 1);
+  // Feet-based anchor, same convention/rationale as player.js#createPlayer —
+  // confirmed every guard texture's feet touch the same bottom pixel row on
+  // every frame, so one fixed origin covers all of them. This is what
+  // makes the guard's obstacle collision (the shared measured FEET box) sit at
+  // their feet instead of their torso, and its depth sort (setDepth(sprite.y)
+  // below) key off feet-Y like every prop's own base-Y.
+  sprite.setOrigin(0.5, 1);
   sprite.setTint(0xffb0a8); // faint red-ish tint so guards read as distinct from the player at a glance
   const cone = scene.add.graphics();
   cone.setDepth(-500); // always beneath every character sprite, above the floor
@@ -61,8 +137,8 @@ export function makeNpc(scene, textureKey, x, y, speed) {
     cone,
     textureKey,
     speed,
-    spawnX: x,
-    spawnY: y,
+    spawnX: safe.x,
+    spawnY: safe.y,
     heading: startHeading,
     desiredHeading: startHeading,
     state: 'walk',
@@ -70,8 +146,8 @@ export function makeNpc(scene, textureKey, x, y, speed) {
     stuckTime: 0,
     overlapCooldown: 0,
     wallHugCooldown: 0,
-    targetX: x,
-    targetY: y,
+    targetX: safe.x,
+    targetY: safe.y,
   };
   playAnimForDir(sprite, textureKey, headingToDir4(startHeading), false);
   pickWanderTarget(npc);
@@ -114,7 +190,7 @@ export function updateNpc(npc, dt) {
       const speedFactor = clamp(0.3 + 0.7 * align, 0.15, 1);
       const stepDist = npc.speed * speedFactor * dt;
       const pos = { x: curX, y: curY };
-      moveWithCollision(pos, mx * stepDist, my * stepDist, NPC_RADIUS);
+      moveWithCollision(pos, mx * stepDist, my * stepDist);
       npc.sprite.x = pos.x * TILE_SIZE;
       npc.sprite.y = pos.y * TILE_SIZE;
       const moved = Math.hypot(pos.x - curX, pos.y - curY);

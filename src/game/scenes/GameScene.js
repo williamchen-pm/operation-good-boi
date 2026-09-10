@@ -50,12 +50,34 @@ function centerCameraOn(cam, x, y, bounds) {
   cam.scrollY = worldTop + displayHeight / 2 - cam.height / 2;
 }
 
+// Base positions are themselves kept well clear of PLAYER_SPAWN (0, 34) —
+// npc_samurai used to start at (-9, 27) (only ~11.4 units away, inside
+// VISION_RANGE + a real reaction-time margin) and relied entirely on
+// npc.js#enforceSpawnSafeZone to push it out at runtime. That runtime check
+// still exists as a defense-in-depth backstop (e.g. against a future def
+// placed too close), but the actual level layout should never depend on it:
+// every entry below is >=16.9 units from the start on its own — the start
+// exclusion applies regardless of where in x a guard sits.
+//
+// x is deliberately spread across the FULL floor width (FLOOR_X is -15..15)
+// rather than clustered on one side — an earlier layout put 6 of 7 guards
+// at x <= -1, leaving the whole east side of the map an easy unguarded
+// lane. Split into thirds (left x<-5, center -5..5, right x>5), this list
+// is LEFT: npc_ninja(-8,10), npc_big(-9,-31), npc_mechanic#2(-6,-22) —
+// CENTER: npc_android(-2,-14), npc_ninja#2(4,-3) — RIGHT: npc_samurai(8,18),
+// npc_mechanic(10,-9): 3/2/2, no zone left empty. y positions are otherwise
+// unchanged from before (still one guard near each depth of the spawn->
+// puppy route; only x was reassigned for width coverage). Two texture keys
+// repeat (ninja, mechanic) — this asset pack has only 5 distinct guard
+// spritesheets for 7 guards.
 const NPC_DEFS = [
-  { x: -9, y: 27, speed: NPC_SPEED_SLOW, texture: 'npc_samurai' },
-  { x: -3, y: 10, speed: NPC_SPEED_NORMAL, texture: 'npc_ninja' },
-  { x: 10, y: -9, speed: NPC_SPEED_FAST, texture: 'npc_mechanic' },
-  { x: -1, y: -14, speed: NPC_SPEED_NORMAL, texture: 'npc_android' },
-  { x: -9, y: -31, speed: NPC_SPEED_SLOW, texture: 'npc_big' },
+  { x: 8, y: 18, speed: NPC_SPEED_SLOW, texture: 'npc_samurai' }, // right
+  { x: -8, y: 10, speed: NPC_SPEED_NORMAL, texture: 'npc_ninja' }, // left
+  { x: 10, y: -9, speed: NPC_SPEED_FAST, texture: 'npc_mechanic' }, // right
+  { x: -2, y: -14, speed: NPC_SPEED_NORMAL, texture: 'npc_android' }, // center
+  { x: -9, y: -31, speed: NPC_SPEED_SLOW, texture: 'npc_big' }, // left
+  { x: 4, y: -3, speed: NPC_SPEED_NORMAL, texture: 'npc_ninja' }, // center
+  { x: -6, y: -22, speed: NPC_SPEED_NORMAL, texture: 'npc_mechanic' }, // left
 ];
 
 export default class GameScene extends Phaser.Scene {
@@ -72,21 +94,36 @@ export default class GameScene extends Phaser.Scene {
       console.error(`[preload] FAILED to load "${file.key}" from ${file.src}`);
     });
 
-    this.load.image('floor_a', 'assets/tiles/floor_a.png');
-    this.load.image('floor_b', 'assets/tiles/floor_b.png');
-    this.load.image('floor_c', 'assets/tiles/floor_c.png');
-    this.load.image('floor_d', 'assets/tiles/floor_d.png');
-    this.load.image('floor_e', 'assets/tiles/floor_e.png');
+    // No floor tile images loaded anymore — the floor is a flat procedural
+    // fill now (see level.js#buildFloor), not tile art. Every variant in
+    // this pack draws its own border, which tiled into a maze/grid pattern
+    // at full-floor scale regardless of which variant was used.
     this.load.image('wall_corrugated', 'assets/tiles/wall_corrugated.png');
-    this.load.image('prop_container_red', 'assets/tiles/prop_container_red.png');
-    this.load.image('prop_container_teal', 'assets/tiles/prop_container_teal.png');
-    this.load.image('prop_container_blue', 'assets/tiles/prop_container_blue.png');
-    this.load.image('prop_dumpster', 'assets/tiles/prop_dumpster.png');
-    this.load.image('prop_tire', 'assets/tiles/prop_tire.png');
+    // Every prop texture below is a crop from the purchased
+    // RCCv2STREETStileset sheets (source rects: asset-sources/cropped/).
+    const props = [
+      'prop_dumpster', 'prop_barrel', 'prop_barrel2', 'prop_barrel_fire',
+      'prop_shelf_stocked', 'prop_cone_pair', 'prop_streetlight', 'prop_vending',
+      'prop_dumpster_round_red', 'prop_dumpster_round_blue',
+      'car_top_1', 'car_top_2', 'car_top_3', 'car_top_4', 'car_top_teal', 'car_top_red',
+      'vehicle_van_blue', 'vehicle_van_red', 'vehicle_hover_teal', 'vehicle_coupe_dark',
+      'scrap_tire_pile', 'scrap_tire_stack', 'scrap_bin',
+      'machine_generator', 'machine_ac_unit', 'utility_box', 'pa_speaker',
+      'satellite_dish', 'arcade_kiosk_purple', 'arcade_kiosk_blue',
+    ];
+    for (const key of props) this.load.image(key, `assets/tiles/${key}.png`);
+    // Real door art (see door.js) — a front-elevation double door, replacing
+    // the flat graphics-drawn placeholder rectangle.
+    this.load.image('prop_door', 'assets/tiles/prop_door.png');
+    // Small wall-mounted light fixture (see level.js#buildWallLamps) — drawn
+    // procedurally at runtime (createWallLampTexture), not loaded from a file;
+    // no matching sconce/fixture prop exists anywhere in the purchased sheet.
 
     this.load.spritesheet('player', 'assets/characters/player.png', { frameWidth: 32, frameHeight: 32 });
-    for (const def of NPC_DEFS) {
-      this.load.spritesheet(def.texture, `assets/characters/${def.texture}.png`, { frameWidth: 32, frameHeight: 32 });
+    // A texture key can appear on more than one NPC_DEFS entry (two guards
+    // sharing a look) — load each unique texture only once.
+    for (const texture of new Set(NPC_DEFS.map((def) => def.texture))) {
+      this.load.spritesheet(texture, `assets/characters/${texture}.png`, { frameWidth: 32, frameHeight: 32 });
     }
     this.load.spritesheet('dog-idle', 'assets/dog/idle.png', { frameWidth: 64, frameHeight: 64 });
     this.load.spritesheet('dog-walk', 'assets/dog/walk.png', { frameWidth: 64, frameHeight: 64 });
@@ -156,25 +193,42 @@ export default class GameScene extends Phaser.Scene {
   // with warm-lit pools" mood — via Phaser's built-in Light2D pipeline
   // rather than a hand-rolled darkness-overlay+mask. Only the ENVIRONMENT
   // (floor/walls/props, all set to the 'Light2D' pipeline in level.js) is
-  // affected by ambient darkness and these point lights; the player, every
-  // NPC sprite, and every vision-cone Graphics object are deliberately left
-  // on Phaser's default pipeline, so they always render at full native
-  // brightness regardless of how dark a given spot on the floor is — the
-  // atmosphere never gets to hide gameplay-critical information.
+  // affected by ambient darkness and these point lights; the player is
+  // deliberately left on Phaser's default pipeline, so they always render
+  // at full native brightness regardless of how dark a given spot on the
+  // floor is — the atmosphere never gets to hide the player from
+  // themselves. Guards and their vision cones are ALSO left off the
+  // Light2D pipeline, but unlike the player they DO dim in unlit areas —
+  // npc.js#updateVisionCone samples this same light setup in plain JS and
+  // fades both the guard sprite's and its cone's alpha down toward a
+  // floor (never fully invisible) as a deliberate, moderate difficulty
+  // increase: harder to spot at a glance in the dark, never impossible to
+  // make out if the player is actually looking.
   setupLighting() {
     this.lights.enable();
-    this.lights.setAmbientColor(0x24222c); // dim, not pitch black — floor variety stays legible everywhere
+    // Darkened from the original 0x24222c (moderate difficulty increase —
+    // unlit floor is meaningfully harder to read at a glance now) but
+    // deliberately NOT anywhere near pitch black: the player sprite, every
+    // NPC sprite, and every vision-cone Graphics object are on Phaser's
+    // default pipeline (see the comment above), so none of them are
+    // affected by this value at all — they stay at full native brightness
+    // in every unlit corner of the map regardless of how dark this gets.
+    // Only the environment (floor/walls/props, all Light2D) reads darker.
+    this.lights.setAmbientColor(0x121118);
     const TS = TILE_SIZE;
     const warm = 0xffd9a0; // matches the old game's lamp color family (0xffe0b8)
     const cool = 0xbfe0ff;
     const pool = (x, y, radius, color, intensity) => this.lights.addLight(x * TS, y * TS, radius, color, intensity);
-    pool(DOOR_XZ.x, DOOR_XZ.y - 4, 170, warm, 1.8); // entrance/exit
-    pool(-10.5, 22, 130, warm, 1.4); // west row, near the forklift
-    pool(10.5, -8, 130, warm, 1.4); // east row, mid-floor
-    pool(0, 12, 150, warm, 1.3); // center aisle
-    pool(0, -14, 150, warm, 1.3); // center aisle, further in
-    pool(-10.8, -28, 120, warm, 1.2); // west row, near the pallet rack
-    pool(PUPPY_SPAWN.x, PUPPY_SPAWN.y, 190, cool, 2.0); // the goal — brightest, distinct color
+    pool(DOOR_XZ.x, DOOR_XZ.y - 4, 150, warm, 1.6); // entrance/exit
+    pool(-10.5, 22, 110, warm, 1.2); // west side, upper floor
+    pool(10.5, -8, 110, warm, 1.2); // east side, mid-floor
+    pool(0, 12, 130, warm, 1.15); // center, upper-mid
+    pool(0, -14, 130, warm, 1.15); // center, lower-mid
+    pool(-10.8, -28, 105, warm, 1.1); // west side, lower floor
+    pool(PUPPY_SPAWN.x, PUPPY_SPAWN.y, 170, cool, 1.8); // the goal — brightest, distinct color
+    // Wall-mounted light fixtures (sprite + their own light pools) are built
+    // in level.js#buildLevel alongside the rest of the environment — see
+    // buildWallLamps there for why they replace the old uniform edge glow.
   }
 
   updateCamera(dt) {

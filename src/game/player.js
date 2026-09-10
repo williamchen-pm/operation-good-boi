@@ -13,12 +13,22 @@
 // sprite directions — the player has no vision cone, so nothing
 // gameplay-critical reads player.heading.
 // ---------------------------------------------------------------------------
-import { TILE_SIZE, PLAYER_SPEED, PLAYER_RADIUS, PLAYER_SPAWN, PLAYER_SPAWN_HEADING } from './constants.js';
+import { TILE_SIZE, PLAYER_SPEED, PLAYER_SPAWN, PLAYER_SPAWN_HEADING } from './constants.js';
 import { moveWithCollision } from './obstacles.js';
 import { headingToDir4, playAnimForDir } from './anim.js';
 
 export function createPlayer(scene) {
   const player = scene.add.sprite(PLAYER_SPAWN.x * TILE_SIZE, PLAYER_SPAWN.y * TILE_SIZE, 'player', 1);
+  // Feet-based anchor (standard top-down convention) — confirmed by direct
+  // alpha-channel inspection that every frame in this spritesheet (all 4
+  // directions, all 3 walk-cycle frames) has its feet touching the exact
+  // same bottom pixel row of its 32x32 cell, so a single fixed origin works
+  // for every frame with no per-frame offset. player.x/y now IS the feet's
+  // world position, used directly for both collision (obstacles.js anchors
+  // the measured FEET box here — see constants.js#FEET_HALF_W) and depth (setDepth(player.y)
+  // below, unchanged code, now sorts on feet-Y — matching how every prop
+  // already sorts on ITS OWN base position, see level.js's propBuilder).
+  player.setOrigin(0.5, 1);
   player.setDepth(player.y);
   player.heading = PLAYER_SPAWN_HEADING;
   player.desiredHeading = PLAYER_SPAWN_HEADING;
@@ -49,12 +59,7 @@ export function updatePlayer(scene, player, keys, dt) {
     player.desiredHeading = Math.atan2(moveDir.y, moveDir.x);
     player.heading = player.desiredHeading; // instant snap — see file header
     const posInTiles = { x: player.x / TILE_SIZE, y: player.y / TILE_SIZE };
-    moveWithCollision(
-      posInTiles,
-      (moveDir.x * PLAYER_SPEED * dt),
-      (moveDir.y * PLAYER_SPEED * dt),
-      PLAYER_RADIUS
-    );
+    moveWithCollision(posInTiles, moveDir.x * PLAYER_SPEED * dt, moveDir.y * PLAYER_SPEED * dt);
     player.x = posInTiles.x * TILE_SIZE;
     player.y = posInTiles.y * TILE_SIZE;
   }
