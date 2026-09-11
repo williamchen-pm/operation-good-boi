@@ -118,11 +118,13 @@ tickTimerDisplay();
 // ---------------------------------------------------------------------------
 // Leaderboard — backed by the "scores" table in Supabase (name, time_seconds,
 // created_at). Two tabs, This Week / This Month, each sorted fastest-first.
-// Fetched at most once per real day via a timestamped localStorage cache; a
-// successful submit busts the cache immediately.
+// Opening it shows the last fetched list from a localStorage cache instantly,
+// then always refetches and replaces it, so the board is never more than one
+// open out of date. (It used to refetch only once a day, which hid other
+// players' newer scores for up to 24 hours.) A successful submit clears the
+// cache, so the player never sees a list missing their own new time.
 // ---------------------------------------------------------------------------
 const DAY_MS = 24 * 60 * 60 * 1000;
-const LEADERBOARD_REFRESH_MS = DAY_MS;
 const LEADERBOARD_WINDOW_MS = { week: 7 * DAY_MS, month: 30 * DAY_MS };
 const LEADERBOARD_TOP_N = 10;
 const LEADERBOARD_CACHE_KEY = 'puppy-game:leaderboard-cache-v1';
@@ -306,13 +308,12 @@ async function openLeaderboard(returnEl) {
   leaderboardEl.style.display = 'flex';
   setLeaderboardTab(leaderboardTab);
 
+  // Show the cached list at once, then always refetch (see the section header).
   const cache = readLeaderboardCache();
   if (cache) {
     leaderboardScores = cache.scores;
     renderLeaderboardList();
   }
-  const stale = !cache || Date.now() - cache.fetchedAt > LEADERBOARD_REFRESH_MS;
-  if (!stale) return;
 
   const token = ++leaderboardLoadToken;
   if (!cache) leaderboardList.innerHTML = '<div style="opacity:0.6;text-align:center;">Loading…</div>';
