@@ -2,6 +2,8 @@
 
 A browser-based top-down stealth game where you rescue a kidnapped puppy from a warehouse.
 
+**▶ Play it: [operationgoodboi.com](https://operationgoodboi.com)**
+
 ## How to play
 
 - **Move:** WASD or Arrow Keys
