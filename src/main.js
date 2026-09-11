@@ -132,7 +132,7 @@ const LEADERBOARD_CACHE_KEY = 'puppy-game:leaderboard-cache-v1';
 // Re-tune if the map changes. (It only guards submissions made through the
 // game; anyone calling the Supabase API directly bypasses it — an accepted
 // limit of a no-login public leaderboard.)
-const MIN_VALID_TIME_SECONDS = 22;
+const MIN_VALID_TIME_SECONDS = 18;
 
 function escapeHtml(str) {
   return str.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
