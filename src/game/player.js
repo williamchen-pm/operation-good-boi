@@ -13,7 +13,7 @@
 // sprite directions — the player has no vision cone, so nothing
 // gameplay-critical reads player.heading.
 // ---------------------------------------------------------------------------
-import { TILE_SIZE, PLAYER_SPEED, PLAYER_SPAWN, PLAYER_SPAWN_HEADING } from './constants.js';
+import { TILE_SIZE, PLAYER_SPEED, PLAYER_SPAWN, PLAYER_SPAWN_HEADING, TOUCH_STICK_DEADZONE, TOUCH_STICK_FULL_SPEED } from './constants.js';
 import { moveWithCollision } from './obstacles.js';
 import { spriteExtents, clampToWorld } from './bounds.js';
 import { headingToDir4, playAnimForDir } from './anim.js';
@@ -42,6 +42,9 @@ export function createPlayer(scene) {
 
 const moveDir = { x: 0, y: 0 };
 
+// `keys`: up/down/left/right ({ isDown }) from the keyboard, plus optional
+// `analog` ({ x, y }, magnitude <= 1) from the touch joystick. The keyboard
+// wins when both are in use.
 export function updatePlayer(scene, player, keys, dt) {
   moveDir.x = 0;
   moveDir.y = 0;
@@ -49,6 +52,16 @@ export function updatePlayer(scene, player, keys, dt) {
   if (keys.down.isDown) moveDir.y += 1;
   if (keys.left.isDown) moveDir.x -= 1;
   if (keys.right.isDown) moveDir.x += 1;
+
+  let speedScale = 1;
+  if (moveDir.x === 0 && moveDir.y === 0 && keys.analog) {
+    const deflection = Math.hypot(keys.analog.x, keys.analog.y);
+    if (deflection > TOUCH_STICK_DEADZONE) {
+      moveDir.x = keys.analog.x;
+      moveDir.y = keys.analog.y;
+      speedScale = Math.min(1, (deflection - TOUCH_STICK_DEADZONE) / (TOUCH_STICK_FULL_SPEED - TOUCH_STICK_DEADZONE));
+    }
+  }
 
   const lenSq = moveDir.x * moveDir.x + moveDir.y * moveDir.y;
   player.moving = lenSq > 0;
@@ -61,7 +74,8 @@ export function updatePlayer(scene, player, keys, dt) {
     player.desiredHeading = Math.atan2(moveDir.y, moveDir.x);
     player.heading = player.desiredHeading; // instant snap — see file header
     const posInTiles = { x: player.x / TILE_SIZE, y: player.y / TILE_SIZE };
-    moveWithCollision(posInTiles, moveDir.x * PLAYER_SPEED * dt, moveDir.y * PLAYER_SPEED * dt);
+    const step = PLAYER_SPEED * speedScale * dt;
+    moveWithCollision(posInTiles, moveDir.x * step, moveDir.y * step);
     clampToWorld(posInTiles, player.worldExtents);
     player.x = posInTiles.x * TILE_SIZE;
     player.y = posInTiles.y * TILE_SIZE;

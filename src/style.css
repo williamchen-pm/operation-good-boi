@@ -16,3 +16,16 @@ body,
 canvas {
   display: block;
 }
+
+/* Touch devices: no pull-to-refresh / rubber-banding, no grey tap flash, and
+   no browser pinch/scroll gestures on the game canvas (the joystick layer in
+   touchControls.js handles touches during play). */
+html,
+body {
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+canvas {
+  touch-action: none;
+}

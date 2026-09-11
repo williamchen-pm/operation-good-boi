@@ -6,6 +6,7 @@ import { gameState } from './game/state.js';
 import { npcs } from './game/npc.js';
 import { bus } from './game/events.js';
 import { NAME_MAX_LENGTH, validateLeaderboardName } from './nameFilter.js';
+import { setupTouchControls } from './touchControls.js';
 
 // ---------------------------------------------------------------------------
 // Supabase — backs the guest leaderboard (submit + fetch against the
@@ -86,7 +87,7 @@ timerEl.style.cssText = [
   'top:18px',
   'left:50%',
   'transform:translateX(-50%)',
-  'font:600 1.6vw/1 system-ui,sans-serif',
+  'font:600 max(14px,1.6vw)/1 system-ui,sans-serif',
   'letter-spacing:0.08em',
   'color:#eaeaea',
   'background:rgba(0,0,0,0.45)',
@@ -104,9 +105,14 @@ document.body.appendChild(timerEl);
 function tickTimerDisplay() {
   requestAnimationFrame(tickTimerDisplay);
   const timerActive = gameState.started && !gameState.over && !gameState.won;
+  touchControls.setPlaying(timerActive);
   timerEl.style.display = timerActive ? 'block' : 'none';
   if (timerActive) timerEl.textContent = formatTime(currentElapsed());
 }
+// On-screen joystick (touch devices only) — see touchControls.js.
+// onEnable is deferred: on a touch device it fires during setup, before the
+// landing screen below exists.
+const touchControls = setupTouchControls({ onEnable: () => queueMicrotask(showTouchHowTo) });
 tickTimerDisplay();
 
 // ---------------------------------------------------------------------------
@@ -176,14 +182,18 @@ function makeOverlayButton(label, onClick) {
   const btn = document.createElement('button');
   btn.textContent = label;
   btn.style.cssText = [
-    // Capped by height too, so wide-but-short windows still fit every screen.
-    'font:bold min(2.2vw,4vh)/1 system-ui,sans-serif',
+    // Capped by height too, so wide-but-short windows still fit every screen;
+    // floored so phone buttons stay readable and a comfortable tap target.
+    'font:bold max(16px,min(2.2vw,4vh))/1 system-ui,sans-serif',
     'padding:0.6em 1.8em',
+    'min-height:44px',
+    'max-width:90vw',
     'background:#3fb6d3',
     'color:#04191f',
     'border:none',
     'border-radius:8px',
     'cursor:pointer',
+    'touch-action:manipulation', // no double-tap zoom delay
   ].join(';');
   btn.addEventListener('click', onClick);
   return btn;
@@ -198,12 +208,15 @@ leaderboardEl.style.cssText = [
   'align-items:center',
   'justify-content:center',
   'gap:18px',
-  'font:bold 3vw/1 system-ui,sans-serif',
+  'font:bold max(24px,3vw)/1 system-ui,sans-serif',
   'letter-spacing:0.12em',
   'color:#eaeaea',
   'background:rgba(0,0,0,0.85)',
   'z-index:30',
+  'padding:16px 5vw',
+  'overflow-y:auto',
 ].join(';');
+leaderboardEl.style.justifyContent = 'safe center';
 const leaderboardTitle = document.createElement('div');
 leaderboardTitle.textContent = 'LEADERBOARD';
 
@@ -211,11 +224,13 @@ function makeTabButton(label, onClick) {
   const btn = document.createElement('button');
   btn.textContent = label;
   btn.style.cssText = [
-    'font:600 1.1vw/1 system-ui,sans-serif',
+    'font:600 max(14px,1.1vw)/1 system-ui,sans-serif',
     'padding:0.5em 1.2em',
+    'min-height:40px',
     'border:2px solid #3fb6d3',
     'border-radius:20px',
     'cursor:pointer',
+    'touch-action:manipulation',
   ].join(';');
   btn.addEventListener('click', onClick);
   return btn;
@@ -228,9 +243,10 @@ tabRow.append(weekTabBtn, monthTabBtn);
 
 const leaderboardList = document.createElement('div');
 leaderboardList.style.cssText = [
-  'font:1.3vw/2 system-ui,sans-serif',
+  'font:max(15px,1.3vw)/2 system-ui,sans-serif',
   'letter-spacing:0.02em',
-  'min-width:16em',
+  'min-width:min(16em,90vw)',
+  'max-width:90vw',
   'min-height:2em',
 ].join(';');
 
@@ -355,13 +371,18 @@ landingHowTo.style.cssText = [
   'padding:0.8em 1.3em',
   'border-radius:8px',
 ].join(';');
+const howToTextEls = {};
 for (const [label, text] of HOW_TO_PLAY) {
   const labelEl = document.createElement('div');
   labelEl.textContent = label.toUpperCase();
   labelEl.style.cssText = 'font-weight:700;letter-spacing:0.12em;color:#e8c088;';
   const textEl = document.createElement('div');
   textEl.textContent = text;
+  howToTextEls[label] = textEl;
   landingHowTo.append(labelEl, textEl);
+}
+function showTouchHowTo() {
+  howToTextEls.Move.textContent = 'Touch and drag anywhere on screen';
 }
 const landingPlayBtn = makeOverlayButton('Loading…', () => {
   if (!sceneReady) return;
@@ -449,7 +470,7 @@ rescuedPhoto.alt = 'Maui, the real good boi';
 rescuedPhoto.draggable = false;
 rescuedPhoto.style.cssText = [
   'display:block',
-  'height:min(20vh,15vw)',
+  'height:min(20vh,max(15vw,110px))', // stays a visible size on narrow phones
   'width:auto',
   'max-width:80vw',
   'border:3px solid #3fe07a',
@@ -470,17 +491,19 @@ rescuedMessage.style.cssText = [
 ].join(';');
 
 const rescuedTimeEl = document.createElement('div');
-rescuedTimeEl.style.cssText = 'font:600 min(2.4vw,4.4vh)/1 system-ui,sans-serif;letter-spacing:0.05em;color:#eaeaea;';
+rescuedTimeEl.style.cssText = 'font:600 max(16px,min(2.4vw,4.4vh))/1 system-ui,sans-serif;letter-spacing:0.05em;color:#eaeaea;';
 
 const submitRow = document.createElement('div');
-submitRow.style.cssText = 'display:flex;gap:10px;align-items:center;';
+submitRow.style.cssText = 'display:flex;flex-wrap:wrap;justify-content:center;gap:10px;align-items:center;max-width:90vw;';
 const nameInput = document.createElement('input');
 nameInput.type = 'text';
 nameInput.placeholder = 'Your name';
 nameInput.maxLength = NAME_MAX_LENGTH;
 nameInput.style.cssText = [
-  'font:1.2vw system-ui,sans-serif',
+  // 16px minimum: iOS Safari zooms the page into any focused input smaller than that.
+  'font:max(16px,1.2vw) system-ui,sans-serif',
   'padding:0.5em 0.7em',
+  'min-height:44px',
   'border-radius:6px',
   'border:none',
   'width:9em',

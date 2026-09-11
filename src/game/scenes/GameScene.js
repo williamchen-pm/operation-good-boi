@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import {
-  TILE_SIZE, FLOOR_X, FLOOR_Y, CAMERA_FOLLOW_RATE, CAMERA_ZOOM,
+  TILE_SIZE, FLOOR_X, FLOOR_Y, CAMERA_FOLLOW_RATE, CAMERA_ZOOM, TOUCH_MIN_VIEW_TILES, TOUCH_CAMERA_BOTTOM_PADDING,
   NPC_SPEED_SLOW, NPC_SPEED_NORMAL, NPC_SPEED_FAST,
 } from '../constants.js';
 import { buildLevel } from '../level.js';
@@ -16,6 +16,7 @@ import { createDirectionalAnims } from '../anim.js';
 import { PLAYER_SPAWN, PLAYER_SPAWN_HEADING, PUPPY_SPAWN, DOOR_XZ } from '../constants.js';
 import { gameState } from '../state.js';
 import { bus } from '../events.js';
+import { touchStick, touchState } from '../touchInput.js';
 
 // Centers a camera on a world point, with its own simple bounds clamp.
 // Deliberately NOT Phaser's Camera.setBounds()/centerOn() — both were found
@@ -162,10 +163,11 @@ export default class GameScene extends Phaser.Scene {
       this.wasd = this.input.keyboard.addKeys({ up: 'W', down: 'S', left: 'A', right: 'D' });
       this.keys = {
         up: { isDown: false }, down: { isDown: false }, left: { isDown: false }, right: { isDown: false },
+        analog: touchStick,
       };
 
       const cam = this.cameras.main;
-      cam.setZoom(CAMERA_ZOOM);
+      cam.setZoom(this.targetCameraZoom());
       cam.roundPixels = true;
       // Deliberately NOT using Phaser's own cam.setBounds()/centerOn() bounds
       // clamping here — found (empirically, via direct scrollX inspection) to
@@ -182,7 +184,7 @@ export default class GameScene extends Phaser.Scene {
         maxY: FLOOR_Y[1] * TILE_SIZE + margin,
       };
       this.cameraFocus = { x: this.player.x, y: this.player.y };
-      centerCameraOn(cam, this.cameraFocus.x, this.cameraFocus.y, this.worldBounds);
+      centerCameraOn(cam, this.cameraFocus.x, this.cameraFocus.y, this.cameraBounds());
 
       this.events.emit('ready');
       bus.emit('scene-ready');
@@ -238,11 +240,39 @@ export default class GameScene extends Phaser.Scene {
     // buildWallLamps there for why they replace the old uniform edge glow.
   }
 
+  // The camera's clamp area. On touch devices it extends TOUCH_CAMERA_BOTTOM_PADDING
+  // tiles past the south wall, so near the entrance/exit door the player sits
+  // above the bottom of the screen, where the thumb and joystick are, instead
+  // of under them.
+  cameraBounds() {
+    if (!touchState.enabled) return this.worldBounds;
+    return { ...this.worldBounds, maxY: this.worldBounds.maxY + TOUCH_CAMERA_BOTTOM_PADDING * TILE_SIZE };
+  }
+
+  // CAMERA_ZOOM on desktop. On touch devices, the largest zoom (in 0.25 steps,
+  // at most CAMERA_ZOOM, at least 1) whose short side still shows
+  // TOUCH_MIN_VIEW_TILES tiles. Re-checked every frame, so rotating the
+  // device or resizing just works.
+  targetCameraZoom() {
+    if (!touchState.enabled) return CAMERA_ZOOM;
+    const shortSide = Math.min(this.scale.width, this.scale.height);
+    const fit = Math.floor((shortSide / (TOUCH_MIN_VIEW_TILES * TILE_SIZE)) * 4) / 4;
+    return Phaser.Math.Clamp(fit, 1, CAMERA_ZOOM);
+  }
+
+  syncCameraZoom() {
+    const cam = this.cameras.main;
+    const zoom = this.targetCameraZoom();
+    if (cam.zoom === zoom) return;
+    cam.setZoom(zoom);
+    centerCameraOn(cam, this.cameraFocus.x, this.cameraFocus.y, this.cameraBounds());
+  }
+
   updateCamera(dt) {
     const t = 1 - Math.exp(-CAMERA_FOLLOW_RATE * dt);
     this.cameraFocus.x += (this.player.x - this.cameraFocus.x) * t;
     this.cameraFocus.y += (this.player.y - this.cameraFocus.y) * t;
-    centerCameraOn(this.cameras.main, this.cameraFocus.x, this.cameraFocus.y, this.worldBounds);
+    centerCameraOn(this.cameras.main, this.cameraFocus.x, this.cameraFocus.y, this.cameraBounds());
   }
 
   resetLevel() {
@@ -251,7 +281,7 @@ export default class GameScene extends Phaser.Scene {
     this.player.heading = this.player.desiredHeading = PLAYER_SPAWN_HEADING;
     this.player.lastMoveDir = { x: 0, y: -1 };
     this.cameraFocus = { x: this.player.x, y: this.player.y };
-    centerCameraOn(this.cameras.main, this.cameraFocus.x, this.cameraFocus.y, this.worldBounds);
+    centerCameraOn(this.cameras.main, this.cameraFocus.x, this.cameraFocus.y, this.cameraBounds());
     gameState.puppyCarried = false;
     resetPuppy(this.puppy);
     this.door.setLocked(true);
@@ -261,6 +291,7 @@ export default class GameScene extends Phaser.Scene {
 
   update(time, deltaMs) {
     const dt = Math.min(deltaMs / 1000, 0.1);
+    this.syncCameraZoom();
     this.keys.up.isDown = this.cursors.up.isDown || this.wasd.up.isDown;
     this.keys.down.isDown = this.cursors.down.isDown || this.wasd.down.isDown;
     this.keys.left.isDown = this.cursors.left.isDown || this.wasd.left.isDown;

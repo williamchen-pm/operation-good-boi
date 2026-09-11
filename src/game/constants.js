@@ -58,6 +58,13 @@ export const MIN_OBSTACLE_CLEARANCE = 2.8;
 
 export const PLAYER_SPEED = 9; // world units per second
 
+// Touch joystick (src/touchControls.js): below the dead zone the player
+// stands still; past it, speed ramps up linearly to full PLAYER_SPEED at
+// TOUCH_STICK_FULL_SPEED deflection, so a light push sneaks slowly.
+// Keyboard movement is always full speed.
+export const TOUCH_STICK_DEADZONE = 0.18;
+export const TOUCH_STICK_FULL_SPEED = 0.75;
+
 export const NPC_SPEED_SLOW = 1.8;
 export const NPC_SPEED_NORMAL = 3.6;
 export const NPC_SPEED_FAST = 6.2;
@@ -137,3 +144,10 @@ export const PLAYER_SPAWN_HEADING = -Math.PI / 2; // facing "up"/north, same as 
 
 export const CAMERA_FOLLOW_RATE = 3.2;
 export const CAMERA_ZOOM = 3; // integer zoom on the 16px-tile art, classic RPG-Maker-ish scale
+// On touch devices the zoom shrinks so the screen's SHORT side still shows at
+// least this many tiles: a guard's cone reaches VISION_RANGE tiles, so with
+// the player centered, any guard close enough to see them is on screen. (At
+// zoom 3 a phone in portrait showed only ~8 tiles across.) Desktop keeps
+// CAMERA_ZOOM.
+export const TOUCH_MIN_VIEW_TILES = 20;
+export const TOUCH_CAMERA_BOTTOM_PADDING = 8; // tiles; see GameScene#cameraBounds
