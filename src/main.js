@@ -241,14 +241,29 @@ const weekTabBtn = makeTabButton('This Week', () => setLeaderboardTab('week'));
 const monthTabBtn = makeTabButton('This Month', () => setLeaderboardTab('month'));
 tabRow.append(weekTabBtn, monthTabBtn);
 
+// Caption + list share one block so the caption sits close to the rows it
+// describes; it says the list is capped, so a player who isn't on it knows why.
+const leaderboardBody = document.createElement('div');
+leaderboardBody.style.cssText = 'display:flex;flex-direction:column;align-items:stretch;gap:10px;max-width:90vw;';
+const leaderboardCaption = document.createElement('div');
+leaderboardCaption.style.cssText = [
+  'font:600 max(13px,0.95vw)/1.3 system-ui,sans-serif',
+  'letter-spacing:0.1em',
+  'text-transform:uppercase',
+  'text-align:center',
+  'color:#e8c088',
+].join(';');
+
 const leaderboardList = document.createElement('div');
 leaderboardList.style.cssText = [
   'font:max(15px,1.3vw)/2 system-ui,sans-serif',
   'letter-spacing:0.02em',
+  'font-variant-numeric:tabular-nums',
   'min-width:min(16em,90vw)',
   'max-width:90vw',
   'min-height:2em',
 ].join(';');
+leaderboardBody.append(leaderboardCaption, leaderboardList);
 
 let leaderboardScores = [];
 let leaderboardTab = 'week';
@@ -259,11 +274,16 @@ function renderLeaderboardList() {
   const rows = leaderboardScores
     .filter((s) => new Date(s.created_at).getTime() >= cutoff)
     .slice(0, LEADERBOARD_TOP_N);
+  // Fixed-width rank column keeps names aligned past #9; long names truncate
+  // instead of pushing the time off a narrow phone screen.
   leaderboardList.innerHTML = rows.length
     ? rows
         .map(
           (entry, i) =>
-            `<div style="display:flex;justify-content:space-between;gap:2em;"><span>${i + 1}. ${escapeHtml(entry.name)}</span><span>${formatTime(entry.time_seconds)}</span></div>`
+            `<div style="display:flex;align-items:baseline;gap:0.6em;">` +
+            `<span style="flex:none;width:2.5ch;text-align:right;opacity:0.6;">${i + 1}</span>` +
+            `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(entry.name)}</span>` +
+            `<span style="flex:none;padding-left:1.4em;">${formatTime(entry.time_seconds)}</span></div>`
         )
         .join('')
     : '<div style="opacity:0.6;text-align:center;">No times yet — be the first!</div>';
@@ -275,6 +295,7 @@ function setLeaderboardTab(tab) {
   weekTabBtn.style.color = tab === 'week' ? '#04191f' : '#eaeaea';
   monthTabBtn.style.background = tab === 'month' ? '#3fb6d3' : 'transparent';
   monthTabBtn.style.color = tab === 'month' ? '#04191f' : '#eaeaea';
+  leaderboardCaption.textContent = `Top ${LEADERBOARD_TOP_N} fastest — ${tab === 'week' ? 'this week' : 'this month'}`;
   renderLeaderboardList();
 }
 
@@ -311,7 +332,7 @@ const closeLeaderboardBtn = makeOverlayButton('Close', () => {
   leaderboardEl.style.display = 'none';
   if (leaderboardReturnEl) leaderboardReturnEl.style.display = 'flex';
 });
-leaderboardEl.append(leaderboardTitle, tabRow, leaderboardList, closeLeaderboardBtn);
+leaderboardEl.append(leaderboardTitle, tabRow, leaderboardBody, closeLeaderboardBtn);
 document.body.appendChild(leaderboardEl);
 
 const leaderboardBtn = makeOverlayButton('Leaderboard', () => openLeaderboard(landingEl));
