@@ -1,6 +1,14 @@
 node_modules
 dist
 *.local
+.env
+.env.*
+.vercel
+
+# Raw purchased asset packs + scratch crops. Their licenses forbid
+# redistributing raw assets, so they stay local; the game only ships the
+# crops in public/assets/.
+asset-sources/
 .DS_Store
 *.log
 .vscode/*
