@@ -8,6 +8,7 @@
 // ---------------------------------------------------------------------------
 import { TILE_SIZE, PUPPY_PICKUP_DIST, PUPPY_TRAIL_DIST, PUPPY_FOLLOW_RATE, PUPPY_SPAWN } from './constants.js';
 import { headingToDir4 } from './anim.js';
+import { spriteExtents, clampToWorld } from './bounds.js';
 
 const DOG_ROW = { up: 0, left: 1, right: 2, down: 3 };
 
@@ -38,6 +39,14 @@ export function createPuppy(scene) {
   puppy.setDepth(puppy.y);
   puppy.play('dog-idle-down');
   puppy.lastDir = 'down';
+  const idle = spriteExtents(scene, 'dog-idle', 0.5);
+  const walk = spriteExtents(scene, 'dog-walk', 0.5);
+  puppy.worldExtents = {
+    left: Math.max(idle.left, walk.left),
+    right: Math.max(idle.right, walk.right),
+    up: Math.max(idle.up, walk.up),
+    down: Math.max(idle.down, walk.down),
+  };
   return puppy;
 }
 
@@ -60,8 +69,10 @@ export function updatePuppyCarry(player, puppy, puppyCarried, dt) {
   const t = 1 - Math.exp(-PUPPY_FOLLOW_RATE * dt);
   const dx = targetX - puppy.x;
   const dy = targetY - puppy.y;
-  puppy.x += dx * t;
-  puppy.y += dy * t;
+  const pos = { x: (puppy.x + dx * t) / TILE_SIZE, y: (puppy.y + dy * t) / TILE_SIZE };
+  clampToWorld(pos, puppy.worldExtents);
+  puppy.x = pos.x * TILE_SIZE;
+  puppy.y = pos.y * TILE_SIZE;
   const moved = Math.hypot(dx * t, dy * t);
   const dir = moved > 0.05 ? headingToDir4(Math.atan2(dy, dx)) : puppy.lastDir;
   if (dir !== puppy.lastDir || !puppy.anims.isPlaying) {

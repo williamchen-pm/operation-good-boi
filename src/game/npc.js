@@ -10,15 +10,23 @@ import {
   WANDER_MIN_DIST, WANDER_MAX_DIST, WANDER_BOUNDS, PAUSE_MIN, PAUSE_MAX,
   OVERLAP_COOLDOWN, STUCK_GIVEUP, WALL_HUG_CHECK_DIST, WALL_HUG_FRACTION,
   WALL_HUG_SAMPLES, WALL_HUG_COOLDOWN, MIN_SPOOK_TURN,
-  PLAYER_SPAWN, NPC_SPAWN_SAFE_RADIUS, FLOOR_X, FLOOR_Y,
+  PLAYER_SPAWN, NPC_SPAWN_SAFE_RADIUS,
+  START_GRACE_SECONDS, START_GRACE_EXCLUSION, START_GRACE_TARGET_BUFFER,
+  NPC_SEPARATION_RADIUS, NPC_SEPARATION_WEIGHT, NPC_MIN_SPACING, NPC_RESPACE_COOLDOWN,
+  WANDER_TARGET_CANDIDATES, FEET_HALF_W,
 } from './constants.js';
-import { moveWithCollision, rayObstacleDistance } from './obstacles.js';
+import { moveWithCollision, rayObstacleDistance, segmentBlocked, walkObstacles } from './obstacles.js';
+import { spriteExtents, clampToWorld } from './bounds.js';
 import { approachAngle, headingToDir4, playAnimForDir } from './anim.js';
 
 export const npcs = [];
 
 function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
+}
+
+function inWanderBounds(x, y) {
+  return x >= WANDER_BOUNDS.minX && x <= WANDER_BOUNDS.maxX && y >= WANDER_BOUNDS.minY && y <= WANDER_BOUNDS.maxY;
 }
 
 // Hard rule (see constants.js#NPC_SPAWN_SAFE_RADIUS): if a requested spawn
@@ -37,16 +45,140 @@ function enforceSpawnSafeZone(x, y) {
   const safeX = PLAYER_SPAWN.x + Math.cos(angle) * NPC_SPAWN_SAFE_RADIUS;
   const safeY = PLAYER_SPAWN.y + Math.sin(angle) * NPC_SPAWN_SAFE_RADIUS;
   return {
-    x: clamp(safeX, FLOOR_X[0] + 1, FLOOR_X[1] - 1),
-    y: clamp(safeY, FLOOR_Y[0] + 1, FLOOR_Y[1] - 1),
+    x: clamp(safeX, WANDER_BOUNDS.minX, WANDER_BOUNDS.maxX),
+    y: clamp(safeY, WANDER_BOUNDS.minY, WANDER_BOUNDS.maxY),
   };
 }
 
+// NPC_DEFS points are hand-spread over the map, but the level's storage rows
+// can cover one. A guard spawns at the nearest point (searching outward in
+// rings) that is open floor: no prop footprint within SPAWN_OPEN_CLEARANCE,
+// inside the wander bounds, and still outside NPC_SPAWN_SAFE_RADIUS.
+const SPAWN_OPEN_CLEARANCE = 1.2;
+function spotIsOpen(x, y) {
+  if (!inWanderBounds(x, y) || distToStart(x, y) < NPC_SPAWN_SAFE_RADIUS) return false;
+  return walkObstacles.every(
+    (o) => Math.hypot(Math.max(o.minX - x, 0, x - o.maxX), Math.max(o.minY - y, 0, y - o.maxY)) >= SPAWN_OPEN_CLEARANCE
+  );
+}
+function nearestOpenSpot(x, y) {
+  if (spotIsOpen(x, y)) return { x, y };
+  for (let r = 0.5; r <= 10; r += 0.5) {
+    const steps = Math.ceil((2 * Math.PI * r) / 0.5);
+    for (let i = 0; i < steps; i++) {
+      const a = (i / steps) * 2 * Math.PI;
+      const px = x + Math.cos(a) * r;
+      const py = y + Math.sin(a) * r;
+      if (spotIsOpen(px, py)) return { x: px, y: py };
+    }
+  }
+  return { x, y };
+}
+
+// True when a guard could walk straight from (ox, oy) to (tx, ty): the path's
+// center line and both feet edges miss every obstacle. Guards steer in
+// straight lines, so a target behind a storage row just walks them into it.
+function walkPathClear(ox, oy, tx, ty) {
+  const len = Math.hypot(tx - ox, ty - oy);
+  if (len < 1e-6) return true;
+  const nx = (-(ty - oy) / len) * FEET_HALF_W;
+  const ny = ((tx - ox) / len) * FEET_HALF_W;
+  return [0, 1, -1].every((k) => !segmentBlocked(ox + nx * k, oy + ny * k, tx + nx * k, ty + ny * k));
+}
+
+// --- Start-area grace period (see constants.js#START_GRACE_*) -------------
+// Counts active play time: GameScene starts it when the level is built or
+// reset and advances it once per simulated frame, after guards have moved.
+let startGraceRemaining = 0;
+export function beginStartGrace() {
+  startGraceRemaining = START_GRACE_SECONDS;
+}
+export function advanceStartGrace(dt) {
+  startGraceRemaining = Math.max(0, startGraceRemaining - dt);
+}
+export function startGraceActive() {
+  return startGraceRemaining > 0;
+}
+function distToStart(x, y) {
+  return Math.hypot(x - PLAYER_SPAWN.x, y - PLAYER_SPAWN.y);
+}
+function targetAllowed(x, y) {
+  return !startGraceActive() || distToStart(x, y) >= START_GRACE_EXCLUSION + START_GRACE_TARGET_BUFFER;
+}
+// Last resort for target pickers that found no allowed candidate: push the
+// target straight out from the spawn point to the allowed distance.
+function keepTargetOutOfStartArea(npc) {
+  if (targetAllowed(npc.targetX, npc.targetY)) return;
+  const r = START_GRACE_EXCLUSION + START_GRACE_TARGET_BUFFER;
+  let ang = Math.atan2(npc.targetY - PLAYER_SPAWN.y, npc.targetX - PLAYER_SPAWN.x);
+  if (!Number.isFinite(ang)) ang = -Math.PI / 2;
+  npc.targetX = clamp(PLAYER_SPAWN.x + Math.cos(ang) * r, WANDER_BOUNDS.minX, WANDER_BOUNDS.maxX);
+  npc.targetY = clamp(PLAYER_SPAWN.y + Math.sin(ang) * r, WANDER_BOUNDS.minY, WANDER_BOUNDS.maxY);
+  if (!targetAllowed(npc.targetX, npc.targetY)) {
+    // clamped back inside by the side walls: head north instead
+    npc.targetX = clamp(npc.targetX, WANDER_BOUNDS.minX, WANDER_BOUNDS.maxX);
+    npc.targetY = PLAYER_SPAWN.y - r;
+  }
+}
+
+// Picks the wander destination (within the usual wander ring) that is
+// farthest from every other guard and every other guard's destination, so
+// guards keep spreading across the map instead of drifting together.
+// Destinations the guard can walk to in a straight line win over ones behind
+// an obstacle (it would only push into it and give up); if none is clear, the
+// spread rule alone decides, as before.
 export function pickWanderTarget(npc) {
-  const ang = Math.random() * Math.PI * 2;
-  const dist = WANDER_MIN_DIST + Math.random() * (WANDER_MAX_DIST - WANDER_MIN_DIST);
-  npc.targetX = clamp(npc.sprite.x / TILE_SIZE + Math.cos(ang) * dist, -WANDER_BOUNDS.x, WANDER_BOUNDS.x);
-  npc.targetY = clamp(npc.sprite.y / TILE_SIZE + Math.sin(ang) * dist, -WANDER_BOUNDS.y, WANDER_BOUNDS.y);
+  const ox = npc.sprite.x / TILE_SIZE;
+  const oy = npc.sprite.y / TILE_SIZE;
+  let best = null;
+  for (let i = 0; i < WANDER_TARGET_CANDIDATES; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const dist = WANDER_MIN_DIST + Math.random() * (WANDER_MAX_DIST - WANDER_MIN_DIST);
+    const tx = clamp(ox + Math.cos(ang) * dist, WANDER_BOUNDS.minX, WANDER_BOUNDS.maxX);
+    const ty = clamp(oy + Math.sin(ang) * dist, WANDER_BOUNDS.minY, WANDER_BOUNDS.maxY);
+    if (!targetAllowed(tx, ty)) continue;
+    let clearance = Infinity;
+    for (const other of npcs) {
+      if (other === npc) continue;
+      clearance = Math.min(
+        clearance,
+        Math.hypot(tx - other.sprite.x / TILE_SIZE, ty - other.sprite.y / TILE_SIZE),
+        Math.hypot(tx - other.targetX, ty - other.targetY)
+      );
+    }
+    const clearPath = walkPathClear(ox, oy, tx, ty);
+    if (!best || (clearPath && !best.clearPath) || (clearPath === best.clearPath && clearance > best.clearance)) {
+      best = { tx, ty, clearance, clearPath };
+    }
+  }
+  if (best) {
+    npc.targetX = best.tx;
+    npc.targetY = best.ty;
+  } else {
+    npc.targetX = ox;
+    npc.targetY = oy - WANDER_MIN_DIST;
+    keepTargetOutOfStartArea(npc);
+  }
+}
+
+// Unit-ish vector pointing away from nearby guards (stronger the closer
+// they are), plus the distance to the nearest one.
+function separationFrom(npc, x, y) {
+  let sx = 0;
+  let sy = 0;
+  let nearest = Infinity;
+  for (const other of npcs) {
+    if (other === npc) continue;
+    const ex = x - other.sprite.x / TILE_SIZE;
+    const ey = y - other.sprite.y / TILE_SIZE;
+    const d = Math.hypot(ex, ey);
+    nearest = Math.min(nearest, d);
+    if (d < 1e-6 || d >= NPC_SEPARATION_RADIUS) continue;
+    const w = (NPC_SEPARATION_RADIUS - d) / NPC_SEPARATION_RADIUS;
+    sx += (ex / d) * w;
+    sy += (ey / d) * w;
+  }
+  return { sx, sy, nearest };
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +250,8 @@ export function updateVisionCone(npc) {
 }
 
 export function makeNpc(scene, textureKey, x, y, speed) {
-  const safe = enforceSpawnSafeZone(x, y);
+  const pushed = enforceSpawnSafeZone(x, y);
+  const safe = nearestOpenSpot(pushed.x, pushed.y);
   const sprite = scene.add.sprite(safe.x * TILE_SIZE, safe.y * TILE_SIZE, textureKey, 1);
   // Feet-based anchor, same convention/rationale as player.js#createPlayer —
   // confirmed every guard texture's feet touch the same bottom pixel row on
@@ -136,6 +269,7 @@ export function makeNpc(scene, textureKey, x, y, speed) {
     sprite,
     cone,
     textureKey,
+    worldExtents: spriteExtents(scene, textureKey),
     speed,
     spawnX: safe.x,
     spawnY: safe.y,
@@ -146,6 +280,7 @@ export function makeNpc(scene, textureKey, x, y, speed) {
     stuckTime: 0,
     overlapCooldown: 0,
     wallHugCooldown: 0,
+    respaceCooldown: 0,
     targetX: safe.x,
     targetY: safe.y,
   };
@@ -160,6 +295,16 @@ export function updateNpc(npc, dt) {
   const textureKey = npc.textureKey;
   if (npc.overlapCooldown > 0) npc.overlapCooldown -= dt;
   if (npc.wallHugCooldown > 0) npc.wallHugCooldown -= dt;
+  if (npc.respaceCooldown > 0) npc.respaceCooldown -= dt;
+
+  const curX = npc.sprite.x / TILE_SIZE;
+  const curY = npc.sprite.y / TILE_SIZE;
+  const sep = separationFrom(npc, curX, curY);
+  if (sep.nearest < NPC_MIN_SPACING && npc.respaceCooldown <= 0) {
+    pickWanderTarget(npc);
+    npc.state = 'walk';
+    npc.respaceCooldown = NPC_RESPACE_COOLDOWN;
+  }
 
   let moving = false;
   if (npc.state === 'pause') {
@@ -169,8 +314,6 @@ export function updateNpc(npc, dt) {
       npc.state = 'walk';
     }
   } else {
-    const curX = npc.sprite.x / TILE_SIZE;
-    const curY = npc.sprite.y / TILE_SIZE;
     const dx = npc.targetX - curX;
     const dy = npc.targetY - curY;
     const d = Math.hypot(dx, dy);
@@ -179,7 +322,7 @@ export function updateNpc(npc, dt) {
       npc.timer = PAUSE_MIN + Math.random() * (PAUSE_MAX - PAUSE_MIN);
       npc.stuckTime = 0;
     } else {
-      npc.desiredHeading = Math.atan2(dy, dx);
+      npc.desiredHeading = Math.atan2(dy / d + NPC_SEPARATION_WEIGHT * sep.sy, dx / d + NPC_SEPARATION_WEIGHT * sep.sx);
       const align = Math.cos(npc.heading - npc.desiredHeading);
       let mx = Math.cos(npc.heading);
       let my = Math.sin(npc.heading);
@@ -191,6 +334,19 @@ export function updateNpc(npc, dt) {
       const stepDist = npc.speed * speedFactor * dt;
       const pos = { x: curX, y: curY };
       moveWithCollision(pos, mx * stepDist, my * stepDist);
+      clampToWorld(pos, npc.worldExtents);
+      // Grace period hard rule: whatever chose this step (wander, spreading
+      // out, cone-overlap spooking, wall-hug turns), a guard may not move
+      // closer to the start area while it's inside the exclusion distance.
+      if (
+        startGraceActive() &&
+        distToStart(pos.x, pos.y) < START_GRACE_EXCLUSION &&
+        distToStart(pos.x, pos.y) < distToStart(curX, curY)
+      ) {
+        pos.x = curX;
+        pos.y = curY;
+        pickWanderTarget(npc);
+      }
       npc.sprite.x = pos.x * TILE_SIZE;
       npc.sprite.y = pos.y * TILE_SIZE;
       const moved = Math.hypot(pos.x - curX, pos.y - curY);
@@ -266,15 +422,16 @@ function spookApart(npc, other) {
     const dist = 2.5 + Math.random() * (WANDER_MAX_DIST - 2.5);
     const tx = ox + Math.cos(ang) * dist;
     const ty = oy + Math.sin(ang) * dist;
-    const inBounds = Math.abs(tx) <= WANDER_BOUNDS.x && Math.abs(ty) <= WANDER_BOUNDS.y;
+    const inBounds = inWanderBounds(tx, ty);
     const newHeading = Math.atan2(ty - oy, tx - ox);
     const turn = Math.abs(((newHeading - npc.heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
     const score = (inBounds ? 10 : 0) + turn;
     if (!best || score > best.score) best = { tx, ty, score, turn };
     if (inBounds && turn >= MIN_SPOOK_TURN) break;
   }
-  npc.targetX = clamp(best.tx, -WANDER_BOUNDS.x, WANDER_BOUNDS.x);
-  npc.targetY = clamp(best.ty, -WANDER_BOUNDS.y, WANDER_BOUNDS.y);
+  npc.targetX = clamp(best.tx, WANDER_BOUNDS.minX, WANDER_BOUNDS.maxX);
+  npc.targetY = clamp(best.ty, WANDER_BOUNDS.minY, WANDER_BOUNDS.maxY);
+  keepTargetOutOfStartArea(npc);
   npc.state = 'walk';
   npc.timer = 0;
   npc.overlapCooldown = OVERLAP_COOLDOWN;
@@ -317,14 +474,15 @@ function turnTowardOpenDirection(npc) {
     const dist = WANDER_MIN_DIST + Math.random() * (WANDER_MAX_DIST - WANDER_MIN_DIST);
     const tx = ox + Math.cos(ang) * dist;
     const ty = oy + Math.sin(ang) * dist;
-    const inBounds = Math.abs(tx) <= WANDER_BOUNDS.x && Math.abs(ty) <= WANDER_BOUNDS.y;
+    const inBounds = inWanderBounds(tx, ty);
     const openness = rayObstacleDistance(ox, oy, ang, VISION_RANGE);
     const score = (inBounds ? 10 : 0) + openness;
     if (!best || score > best.score) best = { tx, ty, score };
     if (inBounds && openness > VISION_RANGE * 0.7) break;
   }
-  npc.targetX = clamp(best.tx, -WANDER_BOUNDS.x, WANDER_BOUNDS.x);
-  npc.targetY = clamp(best.ty, -WANDER_BOUNDS.y, WANDER_BOUNDS.y);
+  npc.targetX = clamp(best.tx, WANDER_BOUNDS.minX, WANDER_BOUNDS.maxX);
+  npc.targetY = clamp(best.ty, WANDER_BOUNDS.minY, WANDER_BOUNDS.maxY);
+  keepTargetOutOfStartArea(npc);
   npc.state = 'walk';
   npc.timer = 0;
   npc.wallHugCooldown = WALL_HUG_COOLDOWN;
@@ -350,6 +508,7 @@ export function resetNpc(npc) {
   npc.stuckTime = 0;
   npc.overlapCooldown = 0;
   npc.wallHugCooldown = 0;
+  npc.respaceCooldown = 0;
   pickWanderTarget(npc);
   updateVisionCone(npc);
 }

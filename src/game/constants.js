@@ -49,9 +49,11 @@ export const WALL_THICKNESS = 0.6;
 export const WALK_GRID_CELL = 0.5;
 export const WALK_GRID_BOUNDS = { minX: -22, maxX: 22, minY: -48, maxY: 44 };
 
-// Minimum gap required between any obstacle's edge and the nearest other
-// obstacle (or wall) — enough for the player (diameter 2*PLAYER_RADIUS) to
-// pass through comfortably, with real margin to spare.
+// Default minimum gap between an obstacle's edge and the nearest other one —
+// enough for the player (diameter 2*PLAYER_RADIUS) to pass through
+// comfortably, with real margin to spare. The level keeps it between props and
+// walls (the perimeter walkway); between props it uses tighter, tiered gaps
+// (see level.js, "Storage rows and aisles").
 export const MIN_OBSTACLE_CLEARANCE = 2.8;
 
 export const PLAYER_SPEED = 9; // world units per second
@@ -60,29 +62,54 @@ export const NPC_SPEED_SLOW = 1.8;
 export const NPC_SPEED_NORMAL = 3.6;
 export const NPC_SPEED_FAST = 6.2;
 
-// Hard cap on how fast ANY character's facing can rotate, in radians/sec —
-// shared by guards AND the player. See the original game's note: tuned so an
-// attentive player has a real window to notice a guard swinging toward them.
-export const TURN_SPEED = 2.4;
+// Hard cap on how fast a guard's facing (and so its vision cone) can rotate,
+// in radians/sec — every turn goes through it (wander, respacing, cone-overlap
+// spooking, wall-avoidance). The player snaps instead (see player.js). Tuned
+// so an attentive player has a real window to notice a cone swinging toward
+// them; lowered from 2.4 (180° in ~1.3s) to 2.0 (~1.6s) for a slightly larger
+// reaction window.
+export const TURN_SPEED = 2.0;
 
 export const VISION_RANGE = 9;
 export const VISION_HALF_ANGLE = (28 * Math.PI) / 180; // ~56 deg full cone
 export const CONE_RAYS = 40;
 
-// Hard safety rule: no NPC's spawn/reset point may be closer than this to
-// PLAYER_SPAWN. A vision cone's reach is hard-capped at VISION_RANGE (see
-// rayObstacleDistance), so keeping every NPC's spawn point at least this far
-// away — comfortably more than VISION_RANGE — guarantees neither an NPC's
-// spawn position NOR its initial (random-heading) vision cone can ever reach
-// the player's start position the instant the level loads/resets, no matter
-// how the heading happens to land. Enforced in npc.js#enforceSpawnSafeZone,
-// which runs for every NPC on creation (its result also becomes spawnX/
-// spawnY, so every reset reuses the same already-safe point).
-export const NPC_SPAWN_SAFE_RADIUS = 16;
+// Start-area grace period: for the first START_GRACE_SECONDS of play after
+// the level loads or resets, no guard may stand in, or aim its cone into, the
+// START_ZONE_RADIUS disc around PLAYER_SPAWN (the entrance door area). A cone
+// reaches at most VISION_RANGE, so keeping every guard at least
+// START_GRACE_EXCLUSION from the spawn point guarantees both, whatever its
+// heading. Enforced every movement step in npc.js (not just at spawn).
+export const START_ZONE_RADIUS = 6;
+export const START_GRACE_SECONDS = 5;
+export const START_GRACE_EXCLUSION = START_ZONE_RADIUS + VISION_RANGE;
+// Wander targets during the grace period keep this much extra distance, so
+// guards don't queue up on the exclusion edge waiting for it to lift.
+export const START_GRACE_TARGET_BUFFER = 3;
+
+// No NPC's spawn/reset point may be closer than this to PLAYER_SPAWN, so the
+// grace invariant already holds the instant the level loads/resets. Enforced
+// in npc.js#enforceSpawnSafeZone (its result becomes spawnX/spawnY, so every
+// reset reuses the same already-safe point).
+export const NPC_SPAWN_SAFE_RADIUS = START_GRACE_EXCLUSION + 1;
+
+// Guard spacing during patrol: wander targets are picked to be far from other
+// guards and their destinations, guards steer away from any guard within
+// NPC_SEPARATION_RADIUS, and one closer than NPC_MIN_SPACING makes them pick
+// a fresh (spread-out) destination.
+export const NPC_SEPARATION_RADIUS = 10;
+export const NPC_SEPARATION_WEIGHT = 1.5;
+export const NPC_MIN_SPACING = 7;
+export const NPC_RESPACE_COOLDOWN = 1.5;
+export const WANDER_TARGET_CANDIDATES = 12;
 
 export const WANDER_MIN_DIST = 4;
 export const WANDER_MAX_DIST = 9;
-export const WANDER_BOUNDS = { x: 14, y: 40 };
+// Guard wander targets stay where a guard's whole sprite fits inside the walls
+// (see bounds.js): up to ~0.6 tiles of sprite past the feet sideways and 2
+// tiles above them, inside walls whose inner faces are at x=+/-14.7,
+// y=-40.7 (north) and y=36.7 (south).
+export const WANDER_BOUNDS = { minX: -13.5, maxX: 13.5, minY: -38.5, maxY: 36 };
 export const PAUSE_MIN = 0.6;
 export const PAUSE_MAX = 2.2;
 export const OVERLAP_COOLDOWN = 2.5;

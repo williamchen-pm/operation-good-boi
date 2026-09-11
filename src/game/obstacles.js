@@ -2,40 +2,20 @@
 // Obstacles, collision, and vision-cone occlusion — ported (math only, no
 // rendering) from the original Three.js game's main.js, XZ renamed to XY.
 //
-// TWO separate box lists, not one:
-//  - `sightObstacles` — each prop's full visual silhouette (the carefully
-//    alpha-audited multi-box HITBOXES from level.js). Used ONLY for vision-
-//    cone occlusion and the guards' line-of-sight check: a guard's cone
-//    should be blocked by an object's whole visible body, exactly as before.
-//  - `walkObstacles` — a small FOOTPRINT near each object's own visual base
-//    (its front-facing bottom edge, where it actually "sits" on the floor).
-//    Used for movement collision, the spawn->goal connectivity check, and
-//    the placement-spacing check. This is what makes collision feet-based
-//    on the OBJECT's side of the interaction (see player.js/npc.js for the
-//    CHARACTER's side — feet-anchored sprite origin): a tall object's
-//    footprint no longer spans its full height, so a character approaching
-//    from ANY direction (front, behind, either side) can get their own feet
-//    close to the object's real base, instead of stopping far short when
-//    approaching from behind a tall silhouette.
-// Splitting these was necessary, not optional: before this, both concerns
-// shared one list, so shrinking it for collision would have also shrunk
-// what a guard's cone could see past — walls are the one exception (a wall
-// has no "tall visual overhang" distinct from its own thickness, so its box
-// goes in both lists unchanged; see registerObstacle()).
+// ONE box list, `walkObstacles`: each wall, plus each prop's floor footprint
+// derived from its texture alpha (level.js#deriveWalkFootprint). Everything
+// reads it — movement collision, the spawn->goal connectivity check, the
+// placement-spacing check, AND vision-cone/line-of-sight occlusion — so a
+// guard's cone is cut off at exactly the edge the player's feet stop at.
+// (Occlusion used to read a separate, looser silhouette list, which left a
+// visible gap between cones and objects.)
 // ---------------------------------------------------------------------------
 import { PLAYER_RADIUS, FEET_HALF_W, FEET_DEPTH, WALK_GRID_CELL, WALK_GRID_BOUNDS, MIN_OBSTACLE_CLEARANCE } from './constants.js';
 
-export const sightObstacles = []; // { minX, maxX, minY, maxY } — full silhouettes
-export const walkObstacles = []; // { minX, maxX, minY, maxY } — base footprints only
+export const walkObstacles = []; // { minX, maxX, minY, maxY }
 
 function makeBox(cx, cy, sx, sy) {
   return { minX: cx - sx / 2, maxX: cx + sx / 2, minY: cy - sy / 2, maxY: cy + sy / 2 };
-}
-
-export function registerSightObstacle(cx, cy, sx, sy) {
-  const o = makeBox(cx, cy, sx, sy);
-  sightObstacles.push(o);
-  return o;
 }
 
 export function registerWalkObstacle(cx, cy, sx, sy) {
@@ -44,33 +24,9 @@ export function registerWalkObstacle(cx, cy, sx, sy) {
   return o;
 }
 
-// Walls (and anything else whose footprint IS its full silhouette) block
-// sight and movement identically — one box, registered into both lists.
-export function registerObstacle(cx, cy, sx, sy) {
-  const o = makeBox(cx, cy, sx, sy);
-  sightObstacles.push(o);
-  walkObstacles.push(o);
-  return o;
-}
-
 export function unregisterObstacle(o) {
-  let idx = sightObstacles.indexOf(o);
-  if (idx !== -1) sightObstacles.splice(idx, 1);
-  idx = walkObstacles.indexOf(o);
+  const idx = walkObstacles.indexOf(o);
   if (idx !== -1) walkObstacles.splice(idx, 1);
-}
-
-export function isWalkableCell(x, y, extraObstacles) {
-  const r = PLAYER_RADIUS;
-  for (const o of walkObstacles) {
-    if (x > o.minX - r && x < o.maxX + r && y > o.minY - r && y < o.maxY + r) return false;
-  }
-  if (extraObstacles) {
-    for (const o of extraObstacles) {
-      if (x > o.minX - r && x < o.maxX + r && y > o.minY - r && y < o.maxY + r) return false;
-    }
-  }
-  return true;
 }
 
 export function pathExists(fromX, fromY, toX, toY, extraObstacles) {
@@ -81,13 +37,30 @@ export function pathExists(fromX, fromY, toX, toY, extraObstacles) {
     c: Math.floor((x - minX) / WALK_GRID_CELL),
     r: Math.floor((y - minY) / WALK_GRID_CELL),
   });
-  const cellCenter = (c, r) => ({ x: minX + (c + 0.5) * WALK_GRID_CELL, y: minY + (r + 0.5) * WALK_GRID_CELL });
   const inBounds = (c, r) => c >= 0 && r >= 0 && c < cols && r < rows;
-  const walkable = (c, r) => {
-    if (!inBounds(c, r)) return false;
-    const { x, y } = cellCenter(c, r);
-    return isWalkableCell(x, y, extraObstacles);
+  // A cell is blocked when its center is strictly inside some box grown by
+  // PLAYER_RADIUS. Mark blocked cells once per box instead of testing
+  // every box for every visited cell — level generation runs this for each
+  // candidate placement, and the per-cell version took seconds at load.
+  const blocked = new Uint8Array(cols * rows);
+  const r0 = PLAYER_RADIUS;
+  const markBox = (o) => {
+    const cMin = Math.max(0, Math.floor((o.minX - r0 - minX) / WALK_GRID_CELL - 0.5));
+    const cMax = Math.min(cols - 1, Math.ceil((o.maxX + r0 - minX) / WALK_GRID_CELL - 0.5));
+    const rMin = Math.max(0, Math.floor((o.minY - r0 - minY) / WALK_GRID_CELL - 0.5));
+    const rMax = Math.min(rows - 1, Math.ceil((o.maxY + r0 - minY) / WALK_GRID_CELL - 0.5));
+    for (let r = rMin; r <= rMax; r++) {
+      const y = minY + (r + 0.5) * WALK_GRID_CELL;
+      if (!(y > o.minY - r0 && y < o.maxY + r0)) continue;
+      for (let c = cMin; c <= cMax; c++) {
+        const x = minX + (c + 0.5) * WALK_GRID_CELL;
+        if (x > o.minX - r0 && x < o.maxX + r0) blocked[r * cols + c] = 1;
+      }
+    }
   };
+  for (const o of walkObstacles) markBox(o);
+  if (extraObstacles) for (const o of extraObstacles) markBox(o);
+  const walkable = (c, r) => inBounds(c, r) && !blocked[r * cols + c];
 
   const start = cellOf(fromX, fromY);
   const goal = cellOf(toX, toY);
@@ -122,21 +95,19 @@ export function pathExists(fromX, fromY, toX, toY, extraObstacles) {
 export function boxGap(a, b) {
   const dx = Math.max(0, Math.max(a.minX - b.maxX, b.minX - a.maxX));
   const dy = Math.max(0, Math.max(a.minY - b.maxY, b.minY - a.maxY));
-  return Math.hypot(dx, dy);
+  return Math.sqrt(dx * dx + dy * dy); // (Math.hypot is much slower, and this runs a lot during level generation)
 }
 
-// `ignore` (a Set) lets a multi-box object exclude its OWN sibling boxes
-// (e.g. its sight silhouette boxes) from this check — only ever called on
-// WALK (footprint) boxes now, checked against other objects' walk footprints,
-// since clearance is fundamentally about guaranteed walkable space, not
-// visual silhouette overlap (tall props are allowed to visually overlap
-// neighbors above their footprint, same as they're allowed to overlap a
-// character's head/shoulders).
-export function hasClearance(obstacle, ignore) {
+// `ignore` (a Set) lets a multi-box object exclude its OWN sibling footprint
+// boxes from this check. Clearance is about guaranteed walkable space, so
+// tall props may still visually overlap neighbors above their footprint.
+// `minGapFor(o)` is the required gap to existing box `o` (defaults to
+// MIN_OBSTACLE_CLEARANCE for everything).
+export function hasClearance(obstacle, ignore, minGapFor = () => MIN_OBSTACLE_CLEARANCE) {
   for (const o of walkObstacles) {
     if (o === obstacle) continue;
     if (ignore && ignore.has(o)) continue;
-    if (boxGap(obstacle, o) < MIN_OBSTACLE_CLEARANCE) return false;
+    if (boxGap(obstacle, o) < minGapFor(o)) return false;
   }
   return true;
 }
@@ -148,7 +119,7 @@ export function hasClearance(obstacle, ignore) {
 // themselves would overlap its footprint, with no extra padding. Each axis is
 // resolved against the direction just moved on that axis (wall-sliding on the
 // other), and movement is sub-stepped so thin footprints can't be tunneled
-// through on a long frame. Reads walkObstacles, not sightObstacles.
+// through on a long frame.
 // ---------------------------------------------------------------------------
 const MAX_SUBSTEP = 0.1;
 
@@ -199,9 +170,9 @@ export function moveWithCollision(pos, dx, dy) {
 
 // ---------------------------------------------------------------------------
 // Ray/segment occlusion — cuts the drawn vision cone off at obstacles and
-// decides whether an NPC can actually SEE a point through one. Reads
-// sightObstacles (full silhouettes) — a guard's view is blocked by an
-// object's whole visible body, not just its small floor footprint.
+// decides whether an NPC can actually SEE a point through one. Reads the
+// same walkObstacles boxes movement collides with (the cone is drawn on the
+// floor, so it stops where the object meets the floor).
 // ---------------------------------------------------------------------------
 export function rayAABBEntry(ox, oy, dx, dy, o) {
   let tmin = -Infinity;
@@ -232,7 +203,7 @@ export function rayObstacleDistance(ox, oy, dirAngle, maxDist) {
   const dx = Math.cos(dirAngle);
   const dy = Math.sin(dirAngle);
   let best = maxDist;
-  for (const o of sightObstacles) {
+  for (const o of walkObstacles) {
     const t = rayAABBEntry(ox, oy, dx, dy, o);
     if (t < best) best = t;
   }
@@ -248,25 +219,20 @@ export function segmentBlocked(ox, oy, tx, ty) {
   return hit < dist - 0.02;
 }
 
-// Places any obstacle (builder returns {gameObjects, walkObstacles,
-// sightObstacles}), then checks that EVERY walk (footprint) box has real
-// clearance from every other walk box already placed (ignoring its own
-// sibling boxes) and that the spawn->puppy route still exists. If either
-// fails, the placement is undone (game objects destroyed, every obstacle
-// entry — walk AND sight — removed) and a warning is logged — same
-// belt-and-suspenders safety net as the original game.
-export function placeObstacleSafe(builder, spawnX, spawnY, goalX, goalY, cx, cy, ...args) {
-  const { gameObjects, walkObstacles: walkObs, sightObstacles: sightObs } = builder(cx, cy, ...args);
-  const selfSet = new Set([...walkObs, ...sightObs]);
-  const clearanceOk = walkObs.every((o) => hasClearance(o, selfSet));
-  const routeOk = pathExists(spawnX, spawnY, goalX, goalY);
-  if (!clearanceOk || !routeOk) {
+// Places any obstacle (builder returns {gameObjects, walkObstacles}), then
+// checks that EVERY footprint box keeps its required gap (`minGapFor(o)`, see
+// hasClearance) from every other box already placed (ignoring its own sibling
+// boxes) and that the spawn->puppy route still exists. If either fails, the placement is undone (game objects
+// destroyed, boxes removed) — same belt-and-suspenders safety net as the
+// original game. Level generation tries many spots on purpose, so ordinary
+// rejections are silent; the route check only runs once clearance passes.
+export function placeObstacleSafe(builder, spawnX, spawnY, goalX, goalY, minGapFor) {
+  const { gameObjects, walkObstacles: walkObs } = builder();
+  const selfSet = new Set(walkObs);
+  const ok = walkObs.every((o) => hasClearance(o, selfSet, minGapFor)) && pathExists(spawnX, spawnY, goalX, goalY);
+  if (!ok) {
     for (const go of gameObjects) go.destroy();
     for (const o of walkObs) unregisterObstacle(o);
-    for (const o of sightObs) unregisterObstacle(o);
-    console.warn(
-      `[level] obstacle at (${cx}, ${cy}) skipped — ${!clearanceOk ? 'too close to a wall/obstacle' : 'would seal the only route'}.`
-    );
     return false;
   }
   return true;

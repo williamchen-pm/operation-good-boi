@@ -15,6 +15,7 @@
 // ---------------------------------------------------------------------------
 import { TILE_SIZE, PLAYER_SPEED, PLAYER_SPAWN, PLAYER_SPAWN_HEADING } from './constants.js';
 import { moveWithCollision } from './obstacles.js';
+import { spriteExtents, clampToWorld } from './bounds.js';
 import { headingToDir4, playAnimForDir } from './anim.js';
 
 export function createPlayer(scene) {
@@ -29,6 +30,7 @@ export function createPlayer(scene) {
   // below, unchanged code, now sorts on feet-Y — matching how every prop
   // already sorts on ITS OWN base position, see level.js's propBuilder).
   player.setOrigin(0.5, 1);
+  player.worldExtents = spriteExtents(scene, 'player');
   player.setDepth(player.y);
   player.heading = PLAYER_SPAWN_HEADING;
   player.desiredHeading = PLAYER_SPAWN_HEADING;
@@ -60,6 +62,7 @@ export function updatePlayer(scene, player, keys, dt) {
     player.heading = player.desiredHeading; // instant snap — see file header
     const posInTiles = { x: player.x / TILE_SIZE, y: player.y / TILE_SIZE };
     moveWithCollision(posInTiles, moveDir.x * PLAYER_SPEED * dt, moveDir.y * PLAYER_SPEED * dt);
+    clampToWorld(posInTiles, player.worldExtents);
     player.x = posInTiles.x * TILE_SIZE;
     player.y = posInTiles.y * TILE_SIZE;
   }

@@ -5,7 +5,10 @@ import {
 } from '../constants.js';
 import { buildLevel } from '../level.js';
 import { createPlayer, updatePlayer } from '../player.js';
-import { makeNpc, updateNpc, resolveConeOverlaps, resolveWallHugging, resetNpc, npcs } from '../npc.js';
+import {
+  makeNpc, updateNpc, resolveConeOverlaps, resolveWallHugging, resetNpc, npcs,
+  beginStartGrace, advanceStartGrace,
+} from '../npc.js';
 import { createPuppy, checkPuppyPickup, updatePuppyCarry, resetPuppy } from '../puppy.js';
 import { createDoor, checkDoor } from '../door.js';
 import { detectingNpc, touchingNpc } from '../detection.js';
@@ -65,11 +68,11 @@ function centerCameraOn(cam, x, y, bounds) {
 // lane. Split into thirds (left x<-5, center -5..5, right x>5), this list
 // is LEFT: npc_ninja(-8,10), npc_big(-9,-31), npc_mechanic#2(-6,-22) —
 // CENTER: npc_android(-2,-14), npc_ninja#2(4,-3) — RIGHT: npc_samurai(8,18),
-// npc_mechanic(10,-9): 3/2/2, no zone left empty. y positions are otherwise
+// npc_mechanic(10,-9), npc_samurai#2(9,-26): 3/2/3, no zone left empty. y positions are otherwise
 // unchanged from before (still one guard near each depth of the spawn->
 // puppy route; only x was reassigned for width coverage). Two texture keys
-// repeat (ninja, mechanic) — this asset pack has only 5 distinct guard
-// spritesheets for 7 guards.
+// repeat (ninja, mechanic, samurai) — this asset pack has only 5 distinct
+// guard spritesheets for 8 guards.
 const NPC_DEFS = [
   { x: 8, y: 18, speed: NPC_SPEED_SLOW, texture: 'npc_samurai' }, // right
   { x: -8, y: 10, speed: NPC_SPEED_NORMAL, texture: 'npc_ninja' }, // left
@@ -78,6 +81,7 @@ const NPC_DEFS = [
   { x: -9, y: -31, speed: NPC_SPEED_SLOW, texture: 'npc_big' }, // left
   { x: 4, y: -3, speed: NPC_SPEED_NORMAL, texture: 'npc_ninja' }, // center
   { x: -6, y: -22, speed: NPC_SPEED_NORMAL, texture: 'npc_mechanic' }, // left
+  { x: 9, y: -26, speed: NPC_SPEED_NORMAL, texture: 'npc_samurai' }, // right, north half (was uncovered)
 ];
 
 export default class GameScene extends Phaser.Scene {
@@ -103,13 +107,14 @@ export default class GameScene extends Phaser.Scene {
     // RCCv2STREETStileset sheets (source rects: asset-sources/cropped/).
     const props = [
       'prop_dumpster', 'prop_barrel', 'prop_barrel2', 'prop_barrel_fire',
-      'prop_shelf_stocked', 'prop_cone_pair', 'prop_streetlight', 'prop_vending',
-      'prop_dumpster_round_red', 'prop_dumpster_round_blue',
+      'prop_cone_pair', 'prop_tire',
+      'crate_lidded', 'crate_dark', 'box_grey_a', 'box_grey_b', 'box_grey_small',
       'car_top_1', 'car_top_2', 'car_top_3', 'car_top_4', 'car_top_teal', 'car_top_red',
       'vehicle_van_blue', 'vehicle_van_red', 'vehicle_hover_teal', 'vehicle_coupe_dark',
+      'vehicle_van_blue_b', 'vehicle_van_red_b', 'vehicle_hover_teal_b', 'vehicle_coupe_dark_b',
+      'prop_locker',
       'scrap_tire_pile', 'scrap_tire_stack', 'scrap_bin',
-      'machine_generator', 'machine_ac_unit', 'utility_box', 'pa_speaker',
-      'satellite_dish', 'arcade_kiosk_purple', 'arcade_kiosk_blue',
+      'machine_generator', 'machine_ac_unit', 'utility_box',
     ];
     for (const key of props) this.load.image(key, `assets/tiles/${key}.png`);
     // Real door art (see door.js) — a front-elevation double door, replacing
@@ -145,9 +150,10 @@ export default class GameScene extends Phaser.Scene {
       // the on-screen timer kept counting, because it runs on its own DOM
       // rAF loop in main.js, completely decoupled from this scene.
       this.setupLighting();
-      buildLevel(this);
+      this.layout = buildLevel(this);
 
       this.player = createPlayer(this);
+      beginStartGrace();
       for (const def of NPC_DEFS) makeNpc(this, def.texture, def.x, def.y, def.speed);
       this.puppy = createPuppy(this);
       this.door = createDoor(this);
@@ -179,6 +185,7 @@ export default class GameScene extends Phaser.Scene {
       centerCameraOn(cam, this.cameraFocus.x, this.cameraFocus.y, this.worldBounds);
 
       this.events.emit('ready');
+      bus.emit('scene-ready');
     } catch (err) {
       // If this fires, create() aborted partway through and NOTHING past
       // the failure point exists — exactly the "solid black, only the DOM
@@ -248,6 +255,7 @@ export default class GameScene extends Phaser.Scene {
     gameState.puppyCarried = false;
     resetPuppy(this.puppy);
     this.door.setLocked(true);
+    beginStartGrace();
     for (const n of npcs) resetNpc(n);
   }
 
@@ -263,6 +271,9 @@ export default class GameScene extends Phaser.Scene {
       for (const npc of npcs) updateNpc(npc, dt);
       resolveConeOverlaps();
       resolveWallHugging();
+      // After every guard has moved this frame, so the whole first
+      // START_GRACE_SECONDS of play is covered.
+      advanceStartGrace(dt);
       this.updateCamera(dt);
 
       gameState.puppyCarried = checkPuppyPickup(this.player, this.puppy, gameState.puppyCarried, () => {
