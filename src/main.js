@@ -5,6 +5,7 @@ import GameScene from './game/scenes/GameScene.js';
 import { gameState } from './game/state.js';
 import { npcs } from './game/npc.js';
 import { bus } from './game/events.js';
+import { NAME_MAX_LENGTH, validateLeaderboardName } from './nameFilter.js';
 
 // ---------------------------------------------------------------------------
 // Supabase — backs the guest leaderboard (submit + fetch against the
@@ -476,7 +477,7 @@ submitRow.style.cssText = 'display:flex;gap:10px;align-items:center;';
 const nameInput = document.createElement('input');
 nameInput.type = 'text';
 nameInput.placeholder = 'Your name';
-nameInput.maxLength = 20;
+nameInput.maxLength = NAME_MAX_LENGTH;
 nameInput.style.cssText = [
   'font:1.2vw system-ui,sans-serif',
   'padding:0.5em 0.7em',
@@ -502,7 +503,21 @@ nameInput.addEventListener('blur', () => {
   gameScene.input.keyboard.enabled = true;
   gameScene.input.keyboard.enableGlobalCapture();
 });
-async function submitScore(name, timeSeconds) {
+// Name problems (empty, too long, offensive — see nameFilter.js) show in the
+// Submit button, which stays usable: editing the name restores it.
+let nameProblemShown = false;
+function resetSubmitButton() {
+  submitBtn.textContent = 'Submit';
+  submitBtn.disabled = false;
+  submitBtn.style.background = '#3fb6d3';
+  submitBtn.style.color = '#04191f';
+  nameProblemShown = false;
+}
+nameInput.addEventListener('input', () => {
+  if (nameProblemShown) resetSubmitButton();
+});
+
+async function submitScore(rawName, timeSeconds) {
   submitBtn.disabled = true;
   // `!(>=)` also rejects NaN/undefined, not just times below the floor.
   if (!(timeSeconds >= MIN_VALID_TIME_SECONDS)) {
@@ -512,6 +527,18 @@ async function submitScore(name, timeSeconds) {
     submitBtn.style.color = '#fff';
     return;
   }
+  const check = validateLeaderboardName(rawName);
+  if (!check.ok) {
+    console.warn(`[leaderboard] rejected name (${check.reason}); not submitted`);
+    submitBtn.textContent = check.message;
+    submitBtn.disabled = false;
+    submitBtn.style.background = '#e8c088';
+    submitBtn.style.color = '#04191f';
+    nameProblemShown = true;
+    return;
+  }
+  const name = check.name;
+  nameInput.value = name;
   submitBtn.textContent = 'Submitting…';
   try {
     const { error } = await supabase.from('scores').insert({ name, time_seconds: timeSeconds });
@@ -525,10 +552,7 @@ async function submitScore(name, timeSeconds) {
     submitBtn.disabled = false;
   }
 }
-const submitBtn = makeOverlayButton('Submit', () => {
-  const name = nameInput.value.trim() || 'Anonymous';
-  submitScore(name, finalTime);
-});
+const submitBtn = makeOverlayButton('Submit', () => submitScore(nameInput.value, finalTime));
 submitRow.append(nameInput, submitBtn);
 
 const playAgainBtn = makeOverlayButton('Play Again', () => resetGame());
@@ -542,10 +566,7 @@ function triggerRescued() {
   stopTimer();
   rescuedTimeEl.textContent = `Time: ${formatTime(finalTime)}`;
   nameInput.value = '';
-  submitBtn.textContent = 'Submit';
-  submitBtn.disabled = false;
-  submitBtn.style.background = '#3fb6d3'; // undo a previous run's rejection styling
-  submitBtn.style.color = '#04191f';
+  resetSubmitButton(); // also undoes a previous run's rejection styling
   rescuedEl.style.display = 'flex';
 }
 

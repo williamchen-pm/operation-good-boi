@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
+    "obscenity": "^0.4.6",
     "phaser": "^3.90.0",
     "three": "^0.186.0"
   }

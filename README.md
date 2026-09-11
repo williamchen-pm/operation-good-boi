@@ -24,6 +24,7 @@ Finish as fast as you can and submit your time to the leaderboard.
 - **Dynamic lighting.** Wall lamps and a spotlight on the puppy light the warehouse, and guards dim in the dark.
 - **Leaderboard.** Weekly and monthly boards, fetched at most once a day through a local cache.
 - **Anti-cheat time validation.** Runs faster than a minimum possible time are rejected before they are submitted.
+- **Leaderboard name filtering.** Offensive names are blocked with [obscenity](https://github.com/jo3-l/obscenity), including spaced-out, leetspeak, and repeated-letter spellings.
 
 ## Local setup
 
