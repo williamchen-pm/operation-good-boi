@@ -127,7 +127,9 @@ export const WALL_HUG_SAMPLES = 7;
 export const WALL_HUG_COOLDOWN = 3.5;
 export const MIN_SPOOK_TURN = (40 * Math.PI) / 180;
 
-export const PUPPY_HEIGHT = 0.8; // gameplay radius only, not visual size
+// Pickup reach only. Guards see the dog at its feet (puppy.js#puppyFeet) and
+// touch it pixel-for-pixel (detection.js#spritesTouch).
+export const PUPPY_HEIGHT = 0.8;
 export const PUPPY_PICKUP_DIST = PLAYER_RADIUS + PUPPY_HEIGHT;
 export const PUPPY_TRAIL_DIST = 1.6;
 export const PUPPY_FOLLOW_RATE = 7;

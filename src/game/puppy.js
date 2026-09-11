@@ -50,6 +50,15 @@ export function createPuppy(scene) {
   return puppy;
 }
 
+// The dog's feet in tiles: the guard-vision test point, the same ground
+// anchor the player is seen at. The dog is drawn from its center, and its paws
+// sit on the frames' bottom opaque row, worldExtents.down (1 tile, measured
+// from alpha) below. Vision used to test the sprite center instead, near the
+// top of the dog.
+export function puppyFeet(puppy) {
+  return { x: puppy.x / TILE_SIZE, y: puppy.y / TILE_SIZE + puppy.worldExtents.down };
+}
+
 export function checkPuppyPickup(player, puppy, puppyCarried, onPickup) {
   if (puppyCarried) return puppyCarried;
   const dx = player.x - puppy.x;
